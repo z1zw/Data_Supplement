@@ -1,0 +1,7 @@
+numpy==1.26.4
+pandas==2.2.2
+# (parquet not used: the cleaned data are written as gzipped CSV)
+torch==2.3.1
+matplotlib==3.8.4
+pyyaml==6.0.1
+requests==2.32.3

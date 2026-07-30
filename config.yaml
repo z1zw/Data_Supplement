@@ -1,0 +1,103 @@
+# =====================================================================
+#  All parameters of the experiment. Nothing is hard-coded in src/.
+#  Every number reported in the paper must be traceable to one run of
+#  this file plus one seed.
+# =====================================================================
+
+seed: 20240917
+
+paths:
+  raw: raw
+  data: data
+  results: results
+
+preprocess:
+  # Number of records kept from each source. Avazu is streamed, so this
+  # bounds memory, not disk.
+  sentiment140_rows: 200000
+  weibo_rows: 100000
+  avazu_rows: 2000000
+  min_text_chars: 5          # texts shorter than this are dropped
+  max_text_chars: 280        # texts longer than this are truncated
+  n_topics: 8                # K: number of latent interest/ad topics
+
+representation:
+  d_hidden: 64               # width of the shared trunk
+  n_hash_features: 16        # hashed Avazu categorical features per ad
+
+environment:
+  # --- click generation ------------------------------------------------
+  # p_click = sigmoid(bias + w_rel*relevance + w_trust*trust
+  #                   + w_mood*mood_congruence - w_fatigue*fatigue)
+  click_bias: -2.20
+  w_relevance: 2.60
+  w_trust: 1.10
+  w_mood: 0.70
+  w_fatigue: 1.80
+
+  # --- trust dynamics ---------------------------------------------------
+  trust_init: 0.80
+  trust_gain_on_click: 0.020
+  trust_loss_on_mismatch: 0.055   # applied when a shown ad has relevance < mismatch_threshold
+  trust_loss_on_overexposure: 0.030
+  mismatch_threshold: 0.30
+  trust_floor: 0.0
+  trust_ceiling: 1.0
+
+  # --- fatigue dynamics -------------------------------------------------
+  fatigue_per_impression: 0.070
+  fatigue_decay_per_step: 0.030
+  overexposure_window: 5          # impressions
+  overexposure_limit: 3           # impressions within the window
+
+  # --- session structure ------------------------------------------------
+  n_users: 2000
+  steps_per_user: 20
+  candidates_per_step: 10
+  interest_drift_prob: 0.10       # baseline p_drift; swept in run_robustness
+
+model:
+  lr: 0.001
+  batch_size: 256
+  epochs: 8
+  weight_decay: 0.00001
+  dropout: 0.10
+
+policy:
+  alpha: 0.65                 # weight on interest vs credibility in Eq. (5)
+  lambda_engagement: 1.0      # lambda in Eq. (7)
+  mu_fatigue: 0.8             # mu in Eq. (7)
+  frequency_cap: 3            # used by the fixed-frequency baselines
+
+rl:
+  gamma: 0.90
+  lr: 0.0005
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 20000
+  replay_size: 50000
+  batch_size: 128
+  target_sync_every: 500
+  warmup_steps: 1000
+
+metrics:
+  ndcg_k: 5
+  # UFI = w_skip*skip_rate + w_neg*negative_feedback_rate + w_decay*interaction_decay
+  ufi_w_skip: 0.40
+  ufi_w_negative: 0.35
+  ufi_w_decay: 0.25
+
+robustness:
+  drift_probs: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+
+llm:
+  temperature: 0.0
+  max_tokens: 200
+  timeout_s: 60
+  n_sessions: 300             # LLM conditions use fewer sessions than the offline ones
+  endpoints:
+    gpt-4o:         {provider: openai,   model: gpt-4o}
+    gpt-5o:         {provider: openai,   model: gpt-5o}
+    deepseek-v3:    {provider: deepseek, model: deepseek-chat}
+    kimi-2:         {provider: moonshot, model: kimi-k2-0905-preview}
+    gemini-1.5-pro: {provider: gemini,   model: gemini-1.5-pro}

@@ -1,0 +1,18 @@
+Your current state of mind is reflected in this post you just engaged with:
+
+"{sentiment_text}"
+
+Emotional valence: {valence}
+Emotional intensity: {arousal} (0.00 = calm, 1.00 = highly aroused)
+
+You have now been shown an advertisement:
+
+Product category: category {ad_topic}
+Established reputation of this category: {ad_trust} (0.00 = unfamiliar or
+  poorly regarded, 1.00 = widely trusted)
+How disruptive the placement is: {ad_intrusiveness} (0.00 = unobtrusive,
+  1.00 = interrupts what you were doing)
+
+Your session so far: {n_seen} advertisements shown, {history_summary}.
+
+Respond with the JSON object only.
