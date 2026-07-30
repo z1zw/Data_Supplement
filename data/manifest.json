@@ -1,0 +1,26 @@
+{
+  "config_sha256": "253a69c444291d67",
+  "seed": 20240917,
+  "synthetic": false,
+  "sentiment140_sampled": 200000,
+  "sentiment140_class_balance": {
+    "1.0": 100000,
+    "-1.0": 100000
+  },
+  "weibo_sampled": 100000,
+  "weibo_class_balance": {
+    "1.0": 50000,
+    "-1.0": 50000
+  },
+  "sentiment_pool_before_filter": 300000,
+  "dropped_too_short": 983,
+  "dropped_duplicates": 4449,
+  "sentiment_pool_final": 294568,
+  "avazu_schema": "kaggle_original",
+  "avazu_rows_read": 2000000,
+  "avazu_empirical_ctr_overall": 0.172616,
+  "avazu_unique_ads": 1064,
+  "avazu_ads_after_min_impressions": 404,
+  "avazu_intrusiveness_field": "banner_pos",
+  "ad_pool_final": 404
+}

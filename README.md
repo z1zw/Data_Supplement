@@ -66,17 +66,54 @@ pip install -r requirements.txt
 
 ## 3. Getting the source data
 
-Download these three public datasets and put them in `raw/`:
+Download these three public datasets into `raw/`. All three commands below
+were run and verified; the resulting file sizes are given so you can check
+your own download.
 
-| dataset | file expected in `raw/` | source |
-|---------|------------------------|--------|
-| Sentiment140 | `training.1600000.processed.noemoticon.csv` | http://help.sentiment140.com/for-students |
-| Weibo_Senti_100k | `weibo_senti_100k.csv` | https://github.com/SophonPlus/ChineseNlpCorpus |
-| Avazu CTR Prediction | `train.csv` (or `train.gz`) | https://www.kaggle.com/c/avazu-ctr-prediction |
+**Sentiment140** (81 MB zipped → 239 MB CSV, 1,600,000 rows)
 
-Avazu's `train.csv` is ~6 GB; `preprocess.py` streams it and keeps only the
-first `avazu_rows` records (default 2,000,000), so you do not need to load
-it all into memory.
+```bash
+curl -L -o raw/s140.zip http://cs.stanford.edu/people/alecmgo/trainingandtestdata.zip
+cd raw && unzip s140.zip     # -> training.1600000.processed.noemoticon.csv
+```
+
+The canonical landing page is http://help.sentiment140.com/for-students.
+
+**Weibo_Senti_100k** (19.7 MB, 119,988 rows)
+
+```bash
+curl -L -o raw/weibo_senti_100k.csv \
+  https://huggingface.co/datasets/dirtycomputer/weibo_senti_100k/resolve/main/weibo_senti_100k.csv
+```
+
+Note: the `SophonPlus/ChineseNlpCorpus` repository referenced in most
+citations **no longer hosts the CSV** — it now contains only a notebook
+pointing at a Baidu Pan link that requires a login. The Hugging Face mirror
+above serves the same file and needs no account.
+
+**Avazu Click-Through Rate Prediction** (624 MB zipped)
+
+The Kaggle original at https://www.kaggle.com/c/avazu-ctr-prediction
+requires a Kaggle account and competition acceptance. The BARS/RecZoo mirror
+needs neither:
+
+```bash
+curl -L -o raw/Avazu_x1.zip \
+  https://huggingface.co/datasets/reczoo/Avazu_x1/resolve/main/Avazu_x1.zip
+cd raw && unzip Avazu_x1.zip
+```
+
+`preprocess.py` streams whichever Avazu CSV it finds and keeps only the
+first `avazu_rows` records (default 2,000,000), so the full file never has
+to fit in memory.
+
+### A note on sampling
+
+Both sentiment files are stored **sorted by label** — the first 200,000 rows
+of Sentiment140 are entirely negative. `preprocess.py` therefore reads each
+file in full and draws a **class-balanced random sample** at the configured
+seed, rather than taking the first *N* rows. The realised class balance is
+recorded in `data/manifest.json`; check it after preprocessing.
 
 ## 4. Running everything
 
@@ -118,4 +155,8 @@ number are preserved for inspection. **Ship the cache with the submission**
 - [ ] Confirm no author name, institution or personal repository URL appears
       anywhere in this folder (the journal's peer review is double-anonymised
       and reviewers can see supplementary files).
-- [ ] Zip the folder as `Supplementary_Information_S1.zip`.
+- [ ] **Exclude `.git/` when you zip.** `.git/config` holds the repository
+      URL, which names a personal account and would break anonymity. Every
+      tracked file is clean — only the git metadata is not.
+- [ ] Zip the folder as `Supplementary_Information_S1.zip`, e.g.
+      `zip -r Supplementary_Information_S1.zip supplementary -x "*/.git/*"`.

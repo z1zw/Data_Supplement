@@ -56,22 +56,43 @@ def arousal_proxy(raw_text: str) -> float:
     return float(np.clip(0.5 * marks + 0.3 * caps + 0.2 * length, 0.0, 1.0))
 
 
-def load_sentiment140(path: Path, n_rows: int) -> pd.DataFrame:
+def _balanced_sample(df: pd.DataFrame, label_col: str, n_rows: int,
+                     seed: int) -> pd.DataFrame:
+    """Take an equal number of rows per class, sampled from the whole file.
+
+    Both source files are stored sorted by label -- the first 200,000 rows of
+    Sentiment140 are entirely negative. Reading with ``nrows=`` would
+    therefore yield a single-class corpus. The whole file is read and then
+    sampled, so the class balance is controlled rather than accidental.
+    """
+    per_class = max(1, n_rows // df[label_col].nunique())
+    parts = [
+        g.sample(min(len(g), per_class), random_state=seed)
+        for _, g in df.groupby(label_col, sort=True)
+    ]
+    return (pd.concat(parts)
+              .sample(frac=1.0, random_state=seed)
+              .reset_index(drop=True))
+
+
+def load_sentiment140(path: Path, n_rows: int, seed: int) -> pd.DataFrame:
     cols = ["target", "id", "date", "flag", "user", "text"]
-    df = pd.read_csv(path, encoding="latin-1", names=cols, nrows=n_rows)
+    df = pd.read_csv(path, encoding="latin-1", names=cols)
     # Coding scheme: Sentiment140 target 0 = negative, 4 = positive.
     df = df[df["target"].isin([0, 4])].copy()
+    df = _balanced_sample(df, "target", n_rows, seed)
     df["sentiment"] = np.where(df["target"] == 4, 1.0, -1.0)
     df["language"] = "en"
     return df[["text", "sentiment", "language"]]
 
 
-def load_weibo(path: Path, n_rows: int) -> pd.DataFrame:
-    df = pd.read_csv(path, nrows=n_rows)
+def load_weibo(path: Path, n_rows: int, seed: int) -> pd.DataFrame:
+    df = pd.read_csv(path)
     # Coding scheme: Weibo_Senti_100k label 1 = positive, 0 = negative.
     label_col = "label" if "label" in df.columns else df.columns[0]
     text_col = "review" if "review" in df.columns else df.columns[1]
     df = df[df[label_col].isin([0, 1])].copy()
+    df = _balanced_sample(df, label_col, n_rows, seed)
     df["sentiment"] = np.where(df[label_col] == 1, 1.0, -1.0)
     df["language"] = "zh"
     df = df.rename(columns={text_col: "text"})
@@ -84,8 +105,10 @@ def build_sentiment_pool(cfg: dict, raw: Path, manifest: dict) -> pd.DataFrame:
 
     s140 = raw / "training.1600000.processed.noemoticon.csv"
     if s140.exists():
-        df = load_sentiment140(s140, pp["sentiment140_rows"])
-        manifest["sentiment140_raw"] = len(df)
+        df = load_sentiment140(s140, pp["sentiment140_rows"], cfg["seed"])
+        manifest["sentiment140_sampled"] = len(df)
+        manifest["sentiment140_class_balance"] = (
+            df["sentiment"].value_counts().to_dict())
         frames.append(df)
     else:
         raise FileNotFoundError(
@@ -93,8 +116,10 @@ def build_sentiment_pool(cfg: dict, raw: Path, manifest: dict) -> pd.DataFrame:
 
     weibo = raw / "weibo_senti_100k.csv"
     if weibo.exists():
-        df = load_weibo(weibo, pp["weibo_rows"])
-        manifest["weibo_raw"] = len(df)
+        df = load_weibo(weibo, pp["weibo_rows"], cfg["seed"])
+        manifest["weibo_sampled"] = len(df)
+        manifest["weibo_class_balance"] = (
+            df["sentiment"].value_counts().to_dict())
         frames.append(df)
     else:
         raise FileNotFoundError(
@@ -124,33 +149,82 @@ def build_sentiment_pool(cfg: dict, raw: Path, manifest: dict) -> pd.DataFrame:
     return pool[["text_clean", "sentiment", "arousal", "topic", "language"]]
 
 
+# Fields used to define an "advertisement". The Kaggle original names them
+# explicitly; some public mirrors ship the same columns anonymised as
+# feat_1..feat_22. Both are supported -- see resolve_avazu_schema().
 AVAZU_CATEGORICAL = [
     "C1", "banner_pos", "site_category", "app_category",
     "device_type", "device_conn_type", "C15", "C16", "C18",
 ]
 
+# Position, within the categorical list, of the field used for the
+# intrusiveness proxy (banner_pos in the original schema).
+AVAZU_INTRUSIVENESS_IDX = 1
+
+
+def resolve_avazu_schema(src: Path, manifest: dict) -> tuple:
+    """Work out which Avazu variant this file is, and which columns to use.
+
+    Returns (label_column, categorical_columns, intrusiveness_column).
+
+    Raises if the file is a mirror whose columns are anonymised, because the
+    intrusiveness proxy needs to know which column is banner_pos and that
+    mapping is not published for those mirrors. Guessing it would put an
+    undocumented assumption into the results.
+    """
+    header = pd.read_csv(src, nrows=0).columns.tolist()
+
+    if "click" in header and set(AVAZU_CATEGORICAL).issubset(header):
+        manifest["avazu_schema"] = "kaggle_original"
+        return "click", AVAZU_CATEGORICAL, "banner_pos"
+
+    if "label" in header and set(AVAZU_CATEGORICAL).issubset(header):
+        # Some mirrors rename only the target column.
+        manifest["avazu_schema"] = "mirror_named_fields"
+        return "label", AVAZU_CATEGORICAL, "banner_pos"
+
+    anonymised = [c for c in header if c.startswith("feat_")]
+    if anonymised:
+        raise ValueError(
+            f"{src.name} uses anonymised column names ({anonymised[:3]}...). "
+            "The mapping from feat_N to the original Avazu fields is not "
+            "published for this mirror, so banner_pos cannot be identified "
+            "and the intrusiveness variable cannot be constructed. Use the "
+            "Kaggle original or the Avazu_x4 mirror, both of which keep the "
+            "original field names. See README section 3.")
+
+    raise ValueError(
+        f"Unrecognised Avazu schema in {src.name}. Columns found: {header[:8]}")
+
 
 def build_ad_pool(cfg: dict, raw: Path, manifest: dict) -> pd.DataFrame:
     """Advertisement inventory derived from Avazu, streamed in chunks."""
     pp, rep = cfg["preprocess"], cfg["representation"]
-    src = raw / "train.csv"
-    if not src.exists():
-        src = raw / "train.gz"
-    if not src.exists():
+    src = None
+    for candidate in ("train.csv", "train.gz", "train.csv.gz"):
+        if (raw / candidate).exists():
+            src = raw / candidate
+            break
+    if src is None:
         raise FileNotFoundError(
-            f"Avazu train.csv/train.gz not found in {raw}. See README section 3.")
+            f"No Avazu train file found in {raw}. See README section 3.")
 
-    usecols = ["click"] + AVAZU_CATEGORICAL
+    label_col, categorical, intrusive_col = resolve_avazu_schema(src, manifest)
+
+    usecols = [label_col] + categorical
     chunks, seen = [], 0
     for chunk in pd.read_csv(src, usecols=usecols, chunksize=500_000,
                              dtype=str, compression="infer"):
-        chunk["click"] = chunk["click"].astype(int)
+        chunk[label_col] = chunk[label_col].astype(int)
         chunks.append(chunk)
         seen += len(chunk)
         if seen >= pp["avazu_rows"]:
             break
     df = pd.concat(chunks, ignore_index=True).iloc[: pp["avazu_rows"]]
-    manifest["avazu_raw"] = len(df)
+    df = df.rename(columns={label_col: "click"})
+    manifest["avazu_rows_read"] = len(df)
+    manifest["avazu_empirical_ctr_overall"] = float(df["click"].mean())
+    AVAZU_CATEGORICAL[:] = categorical
 
     # An "advertisement" is a unique combination of the categorical fields.
     df["ad_key"] = df[AVAZU_CATEGORICAL].agg("|".join, axis=1)
@@ -169,9 +243,20 @@ def build_ad_pool(cfg: dict, raw: Path, manifest: dict) -> pd.DataFrame:
     # Trust prior: empirical CTR rescaled to [0, 1] across the inventory.
     lo, hi = ads["empirical_ctr"].min(), ads["empirical_ctr"].max()
     ads["trust_prior"] = ((ads["empirical_ctr"] - lo) / (hi - lo + 1e-9))
-    # Intrusiveness: banner position, min-max scaled.
-    banner = ads["ad_key"].str.split("|").str[1].astype(float)
-    ads["intrusiveness"] = (banner - banner.min()) / (banner.max() - banner.min() + 1e-9)
+    # Intrusiveness: banner position, min-max scaled. The index is looked up
+    # by name rather than hard-coded, so it stays correct if the field list
+    # in AVAZU_CATEGORICAL is ever reordered.
+    banner_idx = AVAZU_CATEGORICAL.index(intrusive_col)
+    banner = pd.to_numeric(ads["ad_key"].str.split("|").str[banner_idx],
+                           errors="coerce")
+    if banner.isna().all():
+        raise ValueError(
+            f"Could not read numeric values from the {intrusive_col} field; "
+            "the intrusiveness variable cannot be constructed.")
+    banner = banner.fillna(banner.median())
+    ads["intrusiveness"] = ((banner - banner.min())
+                            / (banner.max() - banner.min() + 1e-9))
+    manifest["avazu_intrusiveness_field"] = intrusive_col
     # Hashed representation of the categorical fields.
     for j in range(f):
         ads[f"h{j}"] = [

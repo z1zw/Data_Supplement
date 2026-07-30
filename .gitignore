@@ -1,5 +1,5 @@
 __pycache__/
 *.pyc
+# Source datasets are NOT committed: they are large and publicly hosted.
+# See README section 3 for the exact download commands.
 raw/
-data/
-results/
